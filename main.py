@@ -3,9 +3,10 @@ from __future__ import annotations
 import argparse
 import logging
 from pathlib import Path
-from typing import List, Optional, Sequence, Tuple
+from typing import Callable, List, Optional, Sequence, Tuple
 
 import numpy as np
+import open_clip
 import pandas as pd
 import plotly.express as px
 import torch
@@ -29,7 +30,7 @@ class ImageFolderWithPaths(datasets.ImageFolder):
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Encode an ImageFolder dataset with ResNet18 and visualise a 2D projection."
+        description="Encode an ImageFolder dataset with ResNet18 or CLIP and visualise a 2D projection."
     )
     parser.add_argument(
         "--data-dir",
@@ -71,6 +72,22 @@ def parse_args() -> argparse.Namespace:
         help="Skip loading ImageNet weights and keep the randomly initialised encoder.",
     )
     parser.add_argument(
+        "--encoder",
+        choices=("resnet18", "clip"),
+        default="resnet18",
+        help="Backbone encoder used to extract features before dimensionality reduction.",
+    )
+    parser.add_argument(
+        "--clip-model",
+        default="ViT-B-32",
+        help="Model architecture string passed to open_clip when --encoder=clip.",
+    )
+    parser.add_argument(
+        "--clip-pretrained",
+        default="laion2b_s34b_b79k",
+        help="Pretrained weights identifier for open_clip when --encoder=clip.",
+    )
+    parser.add_argument(
         "--method",
         choices=("pca", "tsne"),
         default="pca",
@@ -103,7 +120,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def build_transforms(use_imagenet_weights: bool) -> transforms.Compose:
+def build_resnet_transforms(use_imagenet_weights: bool) -> transforms.Compose:
     if use_imagenet_weights:
         return ResNet18_Weights.DEFAULT.transforms()
 
@@ -121,14 +138,14 @@ def build_transforms(use_imagenet_weights: bool) -> transforms.Compose:
 
 
 def build_dataloader(
-    data_root: Path, batch_size: int, num_workers: int, use_imagenet_weights: bool
+    data_root: Path, batch_size: int, num_workers: int, transform: transforms.Compose
 ) -> DataLoader:
     if not data_root.exists():
         raise FileNotFoundError(f"Dataset directory '{data_root}' does not exist.")
 
     dataset = ImageFolderWithPaths(
         root=str(data_root),
-        transform=build_transforms(use_imagenet_weights),
+        transform=transform,
     )
     if len(dataset) == 0:
         raise RuntimeError(f"No samples found in '{data_root}'.")
@@ -141,14 +158,47 @@ def build_dataloader(
     )
 
 
-def build_model(model_name: str, use_imagenet_weights: bool) -> nn.Module:
-    if model_name == "resnet18":
-        weights = ResNet18_Weights.DEFAULT if use_imagenet_weights else None
-        model = resnet18(weights=weights)
-        model.fc = nn.Identity()
-    else:
-        raise ValueError(f"Unsupported model name '{model_name}'.")
+def build_resnet_model(use_imagenet_weights: bool) -> nn.Module:
+    weights = ResNet18_Weights.DEFAULT if use_imagenet_weights else None
+    model = resnet18(weights=weights)
+    model.fc = nn.Identity()
     return model
+
+
+def prepare_encoder_components(
+    args: argparse.Namespace,
+) -> Tuple[
+    nn.Module,
+    transforms.Compose,
+    Callable[[nn.Module, torch.Tensor], torch.Tensor],
+    torch.dtype,
+]:
+    encoder_choice = args.encoder
+
+    if encoder_choice == "resnet18":
+        use_imagenet_weights = not args.no_imagenet_weights
+        transform = build_resnet_transforms(use_imagenet_weights)
+        model = build_resnet_model(use_imagenet_weights)
+
+        def forward_fn(m: nn.Module, batch: torch.Tensor) -> torch.Tensor:
+            return m(batch)
+
+        input_dtype = torch.float32
+    elif encoder_choice == "clip":
+        model, _, preprocess = open_clip.create_model_and_transforms(
+            args.clip_model,
+            pretrained=args.clip_pretrained,
+        )
+
+        def forward_fn(m: nn.Module, batch: torch.Tensor) -> torch.Tensor:
+            return m.encode_image(batch)
+
+        transform = preprocess
+        input_dtype = next(model.parameters()).dtype
+    else:
+        raise ValueError(f"Unsupported encoder '{encoder_choice}'.")
+
+    return model, transform, forward_fn, input_dtype
 
 
 def encode_images(
@@ -156,6 +206,8 @@ def encode_images(
     dataloader: DataLoader,
     device: torch.device,
     max_samples: Optional[int],
+    forward_fn: Callable[[nn.Module, torch.Tensor], torch.Tensor],
+    input_dtype: torch.dtype,
 ) -> Tuple[np.ndarray, List[int], List[str]]:
     if max_samples is not None and max_samples <= 0:
         raise ValueError("--max-samples must be greater than zero.")
@@ -170,8 +222,10 @@ def encode_images(
     with torch.no_grad():
         for images, targets, paths in tqdm(dataloader, desc="Encoding images"):
             images = images.to(device)
-            outputs = model(images)
-            batch_embeddings = outputs.cpu().numpy()
+            if images.dtype != input_dtype:
+                images = images.to(dtype=input_dtype)
+            outputs = forward_fn(model, images)
+            batch_embeddings = outputs.float().cpu().numpy()
             batch_targets = targets.tolist()
             batch_paths = list(paths)
 
@@ -237,6 +291,7 @@ def project_embeddings_with_tsne(
 
 def save_projection_visualisation(
     method: str,
+    encoder_label: str,
     coords: np.ndarray,
     labels: Sequence[int],
     paths: Sequence[str],
@@ -257,7 +312,7 @@ def save_projection_visualisation(
         "tsne": ("Dim 1", "Dim 2"),
     }
     xaxis, yaxis = axis_titles.get(method, ("Dim 1", "Dim 2"))
-    title = f"{method.upper()} projection of ResNet18 embeddings"
+    title = f"{method.upper()} projection of {encoder_label.upper()} embeddings"
 
     fig = px.scatter(
         df,
@@ -283,22 +338,21 @@ def main() -> None:
     )
     args = parse_args()
 
-    use_imagenet_weights = not args.no_imagenet_weights
+    model, transform, forward_fn, input_dtype = prepare_encoder_components(args)
+    device = torch.device(args.device)
     dataloader = build_dataloader(
         data_root=args.data_dir,
         batch_size=args.batch_size,
         num_workers=args.num_workers,
-        use_imagenet_weights=use_imagenet_weights,
-    )
-    model = build_model(
-        model_name="resnet18",
-        use_imagenet_weights=use_imagenet_weights,
+        transform=transform,
     )
     vectors, labels, paths = encode_images(
         model=model,
         dataloader=dataloader,
-        device=torch.device(args.device),
+        device=device,
         max_samples=args.max_samples,
+        forward_fn=forward_fn,
+        input_dtype=input_dtype,
     )
     method = args.method
     if method == "pca":
@@ -324,6 +378,7 @@ def main() -> None:
         )
     html_path, csv_path = save_projection_visualisation(
         method=method,
+        encoder_label=args.encoder,
         coords=coords,
         labels=labels,
         paths=paths,
