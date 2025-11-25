@@ -10,6 +10,7 @@ import pandas as pd
 import plotly.express as px
 import torch
 from sklearn.decomposition import PCA
+from sklearn.manifold import TSNE
 from torch import nn
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
@@ -28,7 +29,7 @@ class ImageFolderWithPaths(datasets.ImageFolder):
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Encode an ImageFolder dataset with ResNet18 and visualise a 2D PCA projection."
+        description="Encode an ImageFolder dataset with ResNet18 and visualise a 2D projection."
     )
     parser.add_argument(
         "--data-dir",
@@ -40,7 +41,7 @@ def parse_args() -> argparse.Namespace:
         "--output-dir",
         type=Path,
         required=True,
-        help="Directory where the PCA scatter plot and coordinates will be saved.",
+        help="Directory where scatter plots and coordinates will be saved.",
     )
     parser.add_argument(
         "--batch-size",
@@ -62,12 +63,42 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--max-samples",
         type=int,
-        help="Optionally limit how many images are used for PCA (default uses all).",
+        help="Optionally limit how many images are embedded (default uses all).",
     )
     parser.add_argument(
         "--no-imagenet-weights",
         action="store_true",
         help="Skip loading ImageNet weights and keep the randomly initialised encoder.",
+    )
+    parser.add_argument(
+        "--method",
+        choices=("pca", "tsne"),
+        default="pca",
+        help="Dimensionality reduction method for the 2D visualisation.",
+    )
+    parser.add_argument(
+        "--tsne-perplexity",
+        type=float,
+        default=30.0,
+        help="Perplexity value for t-SNE (ignored when --method=pca).",
+    )
+    parser.add_argument(
+        "--tsne-learning-rate",
+        type=float,
+        default=200.0,
+        help="Learning rate for t-SNE optimisation (ignored when --method=pca).",
+    )
+    parser.add_argument(
+        "--tsne-iterations",
+        type=int,
+        default=1000,
+        help="Number of optimisation iterations for t-SNE (ignored when --method=pca).",
+    )
+    parser.add_argument(
+        "--tsne-random-state",
+        type=int,
+        default=42,
+        help="Random seed fed to t-SNE for reproducibility (ignored when --method=pca).",
     )
     return parser.parse_args()
 
@@ -180,7 +211,32 @@ def project_embeddings_with_pca(
     return coords, pca.explained_variance_ratio_
 
 
-def save_pca_visualisation(
+def project_embeddings_with_tsne(
+    vectors: np.ndarray,
+    perplexity: float,
+    learning_rate: float,
+    n_iter: int,
+    random_state: int,
+) -> np.ndarray:
+    if vectors.shape[0] <= perplexity:
+        raise ValueError(
+            f"t-SNE perplexity ({perplexity}) must be smaller than the number of samples ({vectors.shape[0]})."
+        )
+    tsne = TSNE(
+        n_components=2,
+        perplexity=perplexity,
+        learning_rate=learning_rate,
+        max_iter=n_iter,
+        init="pca",
+        random_state=random_state,
+        metric="euclidean",
+    )
+    coords = tsne.fit_transform(vectors)
+    return coords
+
+
+def save_projection_visualisation(
+    method: str,
     coords: np.ndarray,
     labels: Sequence[int],
     paths: Sequence[str],
@@ -189,26 +245,33 @@ def save_pca_visualisation(
 ) -> Tuple[Path, Path]:
     df = pd.DataFrame(
         {
-            "pc1": coords[:, 0],
-            "pc2": coords[:, 1],
+            "dim1": coords[:, 0],
+            "dim2": coords[:, 1],
             "label": [class_names[idx] for idx in labels],
             "filename": [Path(p).name for p in paths],
             "path": paths,
         }
     )
+    axis_titles = {
+        "pca": ("PC1", "PC2"),
+        "tsne": ("Dim 1", "Dim 2"),
+    }
+    xaxis, yaxis = axis_titles.get(method, ("Dim 1", "Dim 2"))
+    title = f"{method.upper()} projection of ResNet18 embeddings"
+
     fig = px.scatter(
         df,
-        x="pc1",
-        y="pc2",
+        x="dim1",
+        y="dim2",
         color="label",
         hover_data=["filename", "path"],
-        title="PCA projection of ResNet18 embeddings",
+        title=title,
     )
-    fig.update_layout(xaxis_title="PC1", yaxis_title="PC2", legend_title="Class")
+    fig.update_layout(xaxis_title=xaxis, yaxis_title=yaxis, legend_title="Class")
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    html_path = output_dir / "pca_scatter.html"
-    csv_path = output_dir / "pca_projection.csv"
+    html_path = output_dir / f"{method}_scatter.html"
+    csv_path = output_dir / f"{method}_projection.csv"
     fig.write_html(str(html_path))
     df.to_csv(csv_path, index=False)
     return html_path, csv_path
@@ -237,21 +300,38 @@ def main() -> None:
         device=torch.device(args.device),
         max_samples=args.max_samples,
     )
-    coords, variance_ratio = project_embeddings_with_pca(vectors, n_components=2)
-    logging.info(
-        "Explained variance | PC1: %.2f%%, PC2: %.2f%%",
-        variance_ratio[0] * 100,
-        variance_ratio[1] * 100,
-    )
-    html_path, csv_path = save_pca_visualisation(
+    method = args.method
+    if method == "pca":
+        coords, variance_ratio = project_embeddings_with_pca(vectors, n_components=2)
+        logging.info(
+            "Explained variance | PC1: %.2f%%, PC2: %.2f%%",
+            variance_ratio[0] * 100,
+            variance_ratio[1] * 100,
+        )
+    else:
+        coords = project_embeddings_with_tsne(
+            vectors=vectors,
+            perplexity=args.tsne_perplexity,
+            learning_rate=args.tsne_learning_rate,
+            n_iter=args.tsne_iterations,
+            random_state=args.tsne_random_state,
+        )
+        logging.info(
+            "t-SNE parameters | perplexity %.1f | learning rate %.1f | iterations %d",
+            args.tsne_perplexity,
+            args.tsne_learning_rate,
+            args.tsne_iterations,
+        )
+    html_path, csv_path = save_projection_visualisation(
+        method=method,
         coords=coords,
         labels=labels,
         paths=paths,
         class_names=dataloader.dataset.classes,
         output_dir=args.output_dir,
     )
-    logging.info("Saved interactive scatter plot to %s", html_path)
-    logging.info("Saved PCA coordinates to %s", csv_path)
+    logging.info("Saved interactive %s scatter plot to %s", method.upper(), html_path)
+    logging.info("Saved %s coordinates to %s", method.upper(), csv_path)
 
 
 if __name__ == "__main__":
