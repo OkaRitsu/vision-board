@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import logging
 from pathlib import Path
-from typing import Callable, List, Optional, Sequence, Tuple
+from typing import Any, Callable, List, Optional, Sequence, Tuple
 
 import numpy as np
 import open_clip
@@ -16,6 +16,7 @@ from torch import nn
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
 from torchvision.models import ResNet18_Weights, resnet18
+from torchvision.transforms import InterpolationMode
 from tqdm import tqdm
 
 
@@ -30,7 +31,7 @@ class ImageFolderWithPaths(datasets.ImageFolder):
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Encode an ImageFolder dataset with ResNet18 or CLIP and visualise a 2D projection."
+        description="Encode an ImageFolder dataset with ResNet18, CLIP, or DINOv3 and visualise a 2D projection."
     )
     parser.add_argument(
         "--data-dir",
@@ -73,7 +74,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--encoder",
-        choices=("resnet18", "clip"),
+        choices=("resnet18", "clip", "dinov2"),
         default="resnet18",
         help="Backbone encoder used to extract features before dimensionality reduction.",
     )
@@ -86,6 +87,17 @@ def parse_args() -> argparse.Namespace:
         "--clip-pretrained",
         default="laion2b_s34b_b79k",
         help="Pretrained weights identifier for open_clip when --encoder=clip.",
+    )
+    parser.add_argument(
+        "--dinov2-variant",
+        default="dinov2_vits14_reg",
+        help="Torch Hub model name from facebookresearch/dinov2 when --encoder=dinov2.",
+    )
+    parser.add_argument(
+        "--dinov2-image-size",
+        type=int,
+        default=224,
+        help="Input resolution for DINOv2 preprocessing pipeline.",
     )
     parser.add_argument(
         "--method",
@@ -128,6 +140,20 @@ def build_resnet_transforms(use_imagenet_weights: bool) -> transforms.Compose:
         [
             transforms.Resize(256),
             transforms.CenterCrop(224),
+            transforms.ToTensor(),
+            transforms.Normalize(
+                mean=(0.485, 0.456, 0.406),
+                std=(0.229, 0.224, 0.225),
+            ),
+        ]
+    )
+
+
+def build_dino_transforms(image_size: int) -> transforms.Compose:
+    return transforms.Compose(
+        [
+            transforms.Resize(image_size, interpolation=InterpolationMode.BICUBIC),
+            transforms.CenterCrop(image_size),
             transforms.ToTensor(),
             transforms.Normalize(
                 mean=(0.485, 0.456, 0.406),
@@ -195,10 +221,50 @@ def prepare_encoder_components(
 
         transform = preprocess
         input_dtype = next(model.parameters()).dtype
+    elif encoder_choice == "dinov2":
+        model = torch.hub.load(
+            "facebookresearch/dinov2",
+            args.dinov2_variant,
+            pretrained=True,
+        )
+        transform = build_dino_transforms(args.dinov2_image_size)
+
+        def forward_fn(m: nn.Module, batch: torch.Tensor) -> torch.Tensor:
+            outputs = m(batch, is_training=False)
+            return standardise_model_output(outputs)
+
+        input_dtype = torch.float32
     else:
         raise ValueError(f"Unsupported encoder '{encoder_choice}'.")
 
     return model, transform, forward_fn, input_dtype
+
+
+def standardise_model_output(outputs: Any) -> torch.Tensor:
+    if isinstance(outputs, torch.Tensor):
+        return outputs
+    if isinstance(outputs, (list, tuple)):
+        for item in outputs:
+            if isinstance(item, torch.Tensor):
+                return item
+        raise TypeError("Model returned a sequence without tensors.")
+    if isinstance(outputs, dict):
+        preferred_keys = [
+            "x_norm_clstoken",
+            "cls_token",
+            "pooler_output",
+            "embeddings",
+            "features",
+        ]
+        for key in preferred_keys:
+            value = outputs.get(key)
+            if isinstance(value, torch.Tensor):
+                return value
+        for value in outputs.values():
+            if isinstance(value, torch.Tensor):
+                return value
+        raise TypeError("Model returned a dict without tensor values.")
+    raise TypeError(f"Unsupported output type {type(outputs)} from encoder.")
 
 
 def encode_images(
