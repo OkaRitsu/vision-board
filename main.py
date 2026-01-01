@@ -9,9 +9,8 @@ import numpy as np
 import open_clip
 import pandas as pd
 import plotly.express as px
+import streamlit as st
 import torch
-from sklearn.decomposition import PCA
-from sklearn.manifold import TSNE
 from torch import nn
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
@@ -455,5 +454,186 @@ def main() -> None:
     logging.info("Saved %s coordinates to %s", method.upper(), csv_path)
 
 
+def app():
+    st.sidebar.title("Configuration")
+
+    st.sidebar.subheader("Data")
+    data_dir = st.sidebar.text_input("Dataset directory", "data/images")
+
+    st.sidebar.subheader("Encoder")
+    # st.sidebar.write("Select the encoder model for feature extraction:")
+    encoder = st.sidebar.selectbox(
+        "Encoder type",
+        ("resnet18", "clip", "dinov2"),
+        label_visibility="collapsed",
+    )
+    encoder_config = {}
+    if encoder == "clip":
+        clip_model = st.sidebar.text_input("CLIP model", "ViT-B-32")
+        clip_pretrained = st.sidebar.text_input(
+            "CLIP pretrained weights", "laion2b_s34b_b79k"
+        )
+        encoder_config["clip_model"] = clip_model
+        encoder_config["clip_pretrained"] = clip_pretrained
+    elif encoder == "dinov2":
+        dinov2_variant = st.sidebar.text_input("DINOv2 variant", "dinov2_vits14_reg")
+        dinov2_image_size = st.sidebar.number_input(
+            "DINOv2 image size", min_value=64, max_value=1024, value=224, step=1
+        )
+        encoder_config["dinov2_variant"] = dinov2_variant
+        encoder_config["dinov2_image_size"] = dinov2_image_size
+
+    st.sidebar.subheader("Dimensionality Reduction")
+    st.sidebar.write("Choose a method to reduce embedding dimensions:")
+    dim_reduction = st.sidebar.selectbox(
+        "Reduction method",
+        ("pca", "tsne"),
+        label_visibility="collapsed",
+    )
+    dim_reduction_config = {}
+    if dim_reduction == "tsne":
+        tsne_perplexity = st.sidebar.number_input(
+            "t-SNE perplexity", min_value=5.0, max_value=100.0, value=30.0, step=1.0
+        )
+        tsne_learning_rate = st.sidebar.number_input(
+            "t-SNE learning rate",
+            min_value=10.0,
+            max_value=1000.0,
+            value=200.0,
+            step=10.0,
+        )
+        tsne_iterations = st.sidebar.number_input(
+            "t-SNE iterations", min_value=250, max_value=5000, value=1000, step=250
+        )
+        dim_reduction_config["tsne_perplexity"] = tsne_perplexity
+        dim_reduction_config["tsne_learning_rate"] = tsne_learning_rate
+        dim_reduction_config["tsne_iterations"] = tsne_iterations
+
+    st.title("Vision Board")
+    if st.sidebar.button("Run"):
+        # Validate data directory
+        data_path = Path(data_dir)
+        if not data_path.exists():
+            st.error(f"Dataset directory not found: {data_dir}")
+            return
+
+        # Prepare encoder
+        if encoder == "resnet18":
+            model = resnet18(weights=ResNet18_Weights.IMAGENET1K_V1)
+            model.fc = nn.Identity()
+            transform = transforms.Compose(
+                [
+                    transforms.Resize(256, interpolation=InterpolationMode.BILINEAR),
+                    transforms.CenterCrop(224),
+                    transforms.ToTensor(),
+                    transforms.Normalize(
+                        mean=[0.485, 0.456, 0.406],
+                        std=[0.229, 0.224, 0.225],
+                    ),
+                ]
+            )
+            forward_fn = lambda m, x: m(x)
+            input_dtype = torch.float32
+        elif encoder == "clip":
+            model, _, transform = open_clip.create_model_and_transforms(
+                encoder_config.get("clip_model", "ViT-B-32"),
+                pretrained=encoder_config.get("clip_pretrained", "laion2b_s34b_b79k"),
+            )
+            forward_fn = lambda m, x: m.encode_image(x)
+            input_dtype = torch.float32
+        elif encoder == "dinov2":
+            model = torch.hub.load(
+                "facebookresearch/dinov2",
+                encoder_config.get("dinov2_variant", "dinov2_vits14_reg"),
+            )
+            dinov2_size = encoder_config.get("dinov2_image_size", 224)
+            transform = transforms.Compose(
+                [
+                    transforms.Resize(
+                        dinov2_size, interpolation=InterpolationMode.BILINEAR
+                    ),
+                    transforms.CenterCrop(dinov2_size),
+                    transforms.ToTensor(),
+                    transforms.Normalize(
+                        mean=[0.485, 0.456, 0.406],
+                        std=[0.229, 0.224, 0.225],
+                    ),
+                ]
+            )
+            forward_fn = lambda m, x: m(x)
+            input_dtype = torch.float32
+
+        # Build dataloader
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        dataloader = build_dataloader(
+            data_root=data_path,
+            batch_size=32,
+            num_workers=2,
+            transform=transform,
+        )
+
+        # Encode images
+        with st.spinner("Encoding images..."):
+            vectors, labels, paths = encode_images(
+                model=model,
+                dataloader=dataloader,
+                device=device,
+                max_samples=None,
+                forward_fn=forward_fn,
+                input_dtype=input_dtype,
+            )
+
+        # Dimensionality reduction
+        if dim_reduction == "pca":
+            with st.spinner("Applying PCA..."):
+                coords, variance_ratio = project_embeddings_with_pca(
+                    vectors, n_components=2
+                )
+            st.success(
+                f"PCA: Explained variance | PC1: {variance_ratio[0]*100:.2f}%, PC2: {variance_ratio[1]*100:.2f}%"
+            )
+        else:
+            with st.spinner("Applying t-SNE..."):
+                coords = project_embeddings_with_tsne(
+                    vectors=vectors,
+                    perplexity=dim_reduction_config.get("tsne_perplexity", 30.0),
+                    learning_rate=dim_reduction_config.get("tsne_learning_rate", 200.0),
+                    n_iter=dim_reduction_config.get("tsne_iterations", 1000),
+                    random_state=42,
+                )
+            st.success("t-SNE completed")
+
+        # Create visualization
+        df = pd.DataFrame(
+            {
+                "dim1": coords[:, 0],
+                "dim2": coords[:, 1],
+                "label": [dataloader.dataset.classes[idx] for idx in labels],
+                "filename": [Path(p).name for p in paths],
+                "path": paths,
+            }
+        )
+
+        axis_titles = {
+            "pca": ("PC1", "PC2"),
+            "tsne": ("Dim 1", "Dim 2"),
+        }
+        xaxis, yaxis = axis_titles.get(dim_reduction, ("Dim 1", "Dim 2"))
+        title = f"{dim_reduction.upper()} projection of {encoder.upper()} embeddings"
+
+        fig = px.scatter(
+            df,
+            x="dim1",
+            y="dim2",
+            color="label",
+            hover_data=["filename", "path"],
+            title=title,
+        )
+        fig.update_layout(xaxis_title=xaxis, yaxis_title=yaxis, legend_title="Class")
+
+        st.plotly_chart(fig, use_container_width=True)
+
+
 if __name__ == "__main__":
-    main()
+    # main()
+    app()
