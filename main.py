@@ -11,6 +11,8 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 import torch
+from sklearn.decomposition import PCA
+from sklearn.manifold import TSNE
 from torch import nn
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
@@ -602,9 +604,8 @@ def app():
                     random_state=42,
                 )
             st.success("t-SNE completed")
-
-        # Create visualization
-        df = pd.DataFrame(
+            # Create visualization
+        st.session_state.df = pd.DataFrame(
             {
                 "dim1": coords[:, 0],
                 "dim2": coords[:, 1],
@@ -614,6 +615,35 @@ def app():
             }
         )
 
+    if "df" in st.session_state:
+        df = st.session_state.df.copy()
+        range_cols = st.columns(2)
+        with range_cols[0]:
+            x_range = st.slider(
+                "X range",
+                float(df["dim1"].min()),
+                float(df["dim1"].max()),
+                (
+                    float(df["dim1"].min()),
+                    float(df["dim1"].max()),
+                ),
+            )
+        with range_cols[1]:
+            y_range = st.slider(
+                "Y range",
+                float(df["dim2"].min()),
+                float(df["dim2"].max()),
+                (
+                    float(df["dim2"].min()),
+                    float(df["dim2"].max()),
+                ),
+            )
+        df = df[
+            (df["dim1"] >= x_range[0])
+            & (df["dim1"] <= x_range[1])
+            & (df["dim2"] >= y_range[0])
+            & (df["dim2"] <= y_range[1])
+        ]
         axis_titles = {
             "pca": ("PC1", "PC2"),
             "tsne": ("Dim 1", "Dim 2"),
@@ -621,6 +651,7 @@ def app():
         xaxis, yaxis = axis_titles.get(dim_reduction, ("Dim 1", "Dim 2"))
         title = f"{dim_reduction.upper()} projection of {encoder.upper()} embeddings"
 
+        st.subheader("Scatter Plot")
         fig = px.scatter(
             df,
             x="dim1",
@@ -632,6 +663,27 @@ def app():
         fig.update_layout(xaxis_title=xaxis, yaxis_title=yaxis, legend_title="Class")
 
         st.plotly_chart(fig, use_container_width=True)
+
+        st.subheader("Loaded images")
+
+        # Select columns for caption
+        available_cols = [col for col in df.columns.tolist() if col != "path"]
+        caption_cols = st.multiselect(
+            "Columns for caption",
+            options=available_cols,
+            default=["filename", "label"],
+        )
+
+        sort_option = st.selectbox("Sort by", options=df.columns.tolist())
+        img_cols = st.columns(3)
+        df_sorted = df.sort_values(by=sort_option).reset_index(drop=True)
+        for i, row in df_sorted.iterrows():
+            # Build caption from selected columns
+            caption_parts = [f"{col}: {row[col]}" for col in caption_cols]
+            caption = ", ".join(caption_parts) if caption_parts else "No caption"
+
+            with img_cols[i % 3]:
+                st.image(row["path"], caption=caption)
 
 
 if __name__ == "__main__":
