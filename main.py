@@ -7,8 +7,8 @@ import plotly.express as px
 import streamlit as st
 
 from src.embedder import Embedder
-from src.encoders import CLIPStrategy, DinoV2Strategy, ResNetStrategy
-from src.reducers import PCAStrategy, TSNEStrategy
+from src.encoders import EncoderStrategyFactory
+from src.reducers import ReducerStrategyFactory
 
 
 def app():
@@ -74,20 +74,9 @@ def app():
             st.error(f"Dataset directory not found: {data_dir}")
             return
 
-        # Prepare encoder
-        if encoder_type == "resnet18":
-            encoder = ResNetStrategy()
-        elif encoder_type == "dinov2":
-            encoder = DinoV2Strategy()
-        elif encoder_type == "clip":
-            encoder = CLIPStrategy()
-
-        # Prepare dimensionality reducer
-        if dim_reduction == "pca":
-            reducer = PCAStrategy()
-        elif dim_reduction == "tsne":
-            reducer = TSNEStrategy()
-
+        # Prepare encoder and reducer
+        encoder = EncoderStrategyFactory.get_strategy(encoder_type)
+        reducer = ReducerStrategyFactory.get_strategy(dim_reduction)
         embedder = Embedder(
             encoder_strategy=encoder,
             reducer_strategy=reducer,

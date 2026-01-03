@@ -1,2 +1,1 @@
-from src.reducers.pca import PCAStrategy
-from src.reducers.tsne import TSNEStrategy
+from src.reducers.factory import ReducerStrategyFactory
