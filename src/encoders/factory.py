@@ -1,4 +1,7 @@
-from src.encoders import CLIPStrategy, DinoV2Strategy, ResNetStrategy
+from src.encoders.clip import CLIPStrategy
+from src.encoders.depth_anything_v2 import DepthAnythingV2Strategy
+from src.encoders.dinov2 import DinoV2Strategy
+from src.encoders.resnet import ResNetStrategy
 
 
 class EncoderStrategyFactory:
@@ -6,6 +9,7 @@ class EncoderStrategyFactory:
         "resnet": ResNetStrategy,
         "clip": CLIPStrategy,
         "dinov2": DinoV2Strategy,
+        "depth_anything_v2": DepthAnythingV2Strategy,
     }
 
     @classmethod

@@ -1,4 +1,5 @@
-from src.reducers import PCAStrategy, TSNEStrategy
+from src.reducers.pca import PCAStrategy
+from src.reducers.tsne import TSNEStrategy
 
 
 class ReducerStrategyFactory:

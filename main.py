@@ -21,7 +21,7 @@ def app():
     # st.sidebar.write("Select the encoder model for feature extraction:")
     encoder_type = st.sidebar.selectbox(
         "Encoder type",
-        ("resnet18", "clip", "dinov2"),
+        ("resnet18", "clip", "dinov2", "depth_anything_v2"),
         label_visibility="collapsed",
     )
     encoder_config = {}
