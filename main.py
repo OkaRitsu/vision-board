@@ -22,7 +22,7 @@ def app():
     # st.sidebar.write("Select the encoder model for feature extraction:")
     encoder_type = st.sidebar.selectbox(
         "Encoder type",
-        ("resnet18", "clip", "dinov2", "depth_anything_v2"),
+        ("resnet", "clip", "dinov2", "depth_anything_v2"),
         label_visibility="collapsed",
     )
     encoder_config = {}
@@ -42,7 +42,6 @@ def app():
         encoder_config["dinov2_image_size"] = dinov2_image_size
 
     st.sidebar.subheader("Dimensionality Reduction")
-    st.sidebar.write("Choose a method to reduce embedding dimensions:")
     dim_reduction = st.sidebar.selectbox(
         "Reduction method",
         ("pca", "tsne"),
@@ -94,11 +93,10 @@ def app():
         # Create visualization
         st.session_state.df = pd.DataFrame(
             {
-                "dim1": coords[:, 0],
-                "dim2": coords[:, 1],
+                "x": coords[:, 0],
+                "y": coords[:, 1],
                 "label": labels,
                 "filename": [Path(p).name for p in paths],
-                "path": paths,
             }
         )
 
@@ -108,28 +106,28 @@ def app():
         with range_cols[0]:
             x_range = st.slider(
                 "X range",
-                float(df["dim1"].min()),
-                float(df["dim1"].max()),
+                float(df["x"].min()),
+                float(df["x"].max()),
                 (
-                    float(df["dim1"].min()),
-                    float(df["dim1"].max()),
+                    float(df["x"].min()),
+                    float(df["x"].max()),
                 ),
             )
         with range_cols[1]:
             y_range = st.slider(
                 "Y range",
-                float(df["dim2"].min()),
-                float(df["dim2"].max()),
+                float(df["y"].min()),
+                float(df["y"].max()),
                 (
-                    float(df["dim2"].min()),
-                    float(df["dim2"].max()),
+                    float(df["y"].min()),
+                    float(df["y"].max()),
                 ),
             )
         df = df[
-            (df["dim1"] >= x_range[0])
-            & (df["dim1"] <= x_range[1])
-            & (df["dim2"] >= y_range[0])
-            & (df["dim2"] <= y_range[1])
+            (df["x"] >= x_range[0])
+            & (df["x"] <= x_range[1])
+            & (df["y"] >= y_range[0])
+            & (df["y"] <= y_range[1])
         ]
 
         if "selected" not in df.columns:
@@ -160,8 +158,8 @@ def app():
 
         fig = px.scatter(
             df_not_selected,
-            x="dim1",
-            y="dim2",
+            x="x",
+            y="y",
             color="label",
             hover_data=["filename"],
         )
@@ -170,8 +168,8 @@ def app():
         if not df_selected.empty:
             fig_selected = px.scatter(
                 df_selected,
-                x="dim1",
-                y="dim2",
+                x="x",
+                y="y",
                 color="label",
                 hover_data=["filename"],
             )
