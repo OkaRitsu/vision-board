@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from urllib.parse import quote
 
 import pandas as pd
 import plotly.express as px
@@ -130,48 +131,66 @@ def app():
             & (df["dim2"] >= y_range[0])
             & (df["dim2"] <= y_range[1])
         ]
-        axis_titles = {
-            "pca": ("PC1", "PC2"),
-            "tsne": ("Dim 1", "Dim 2"),
-        }
-        xaxis, yaxis = axis_titles.get(dim_reduction, ("Dim 1", "Dim 2"))
-        title = (
-            f"{dim_reduction.upper()} projection of {encoder_type.upper()} embeddings"
+
+        if "selected" not in df.columns:
+            df["selected"] = False
+
+        # FIXME: static ディレクトリに画像を置く必要がある（アプリを起動する前に）
+        # TODO: 相対パスを使った方法を検討
+        # 例:
+        # mkdir static && cd static
+        # ln -s ../data/InsPLAD-fault/defect_supervised/glass-insulator/val/*/*.jpg .
+        df["url"] = df["filename"].apply(lambda p: f"app/static/{quote(p)}")
+
+        edited_df = st.data_editor(
+            df,
+            column_config={
+                "url": st.column_config.ImageColumn("image", pinned=True),
+                "selected": st.column_config.CheckboxColumn("Select", pinned=True),
+            },
+            hide_index=True,
+            key="data_editor",
         )
 
-        st.subheader("Scatter Plot")
+        # Update scatter plot with selected highlights
+
+        # Create separate dataframes for selected and non-selected points
+        df_not_selected = edited_df[~edited_df["selected"]]
+        df_selected = edited_df[edited_df["selected"]]
+
         fig = px.scatter(
-            df,
+            df_not_selected,
             x="dim1",
             y="dim2",
             color="label",
-            hover_data=["filename", "path"],
-            title=title,
+            hover_data=["filename"],
         )
-        fig.update_layout(xaxis_title=xaxis, yaxis_title=yaxis, legend_title="Class")
 
+        # Add selected points with border
+        if not df_selected.empty:
+            fig_selected = px.scatter(
+                df_selected,
+                x="dim1",
+                y="dim2",
+                color="label",
+                hover_data=["filename"],
+            )
+
+            # Update selected points to have thick border
+            for trace in fig_selected.data:
+                trace.marker.line.width = 3
+                trace.marker.line.color = "red"
+                trace.marker.size = 12
+                trace.showlegend = False  # Don't duplicate in legend
+                fig.add_trace(trace)
+
+        # Update layout for non-selected points (no border)
+        fig.update_traces(
+            marker=dict(size=8, line=dict(width=0)), selector=dict(showlegend=True)
+        )
+
+        fig.update_layout(xaxis_title="X", yaxis_title="Y", legend_title="Class")
         st.plotly_chart(fig, use_container_width=True)
-
-        st.subheader("Loaded images")
-
-        # Select columns for caption
-        available_cols = [col for col in df.columns.tolist() if col != "path"]
-        caption_cols = st.multiselect(
-            "Columns for caption",
-            options=available_cols,
-            default=["filename", "label"],
-        )
-
-        sort_option = st.selectbox("Sort by", options=df.columns.tolist())
-        img_cols = st.columns(3)
-        df_sorted = df.sort_values(by=sort_option).reset_index(drop=True)
-        for i, row in df_sorted.iterrows():
-            # Build caption from selected columns
-            caption_parts = [f"{col}: {row[col]}" for col in caption_cols]
-            caption = ", ".join(caption_parts) if caption_parts else "No caption"
-
-            with img_cols[i % 3]:
-                st.image(row["path"], caption=caption)
 
 
 if __name__ == "__main__":
