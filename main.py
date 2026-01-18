@@ -133,104 +133,106 @@ def app():
         # ln -s ../data/InsPLAD-fault/defect_supervised/glass-insulator/val/*/*.jpg .
         df["url"] = df["filename"].apply(lambda p: f"app/static/{quote(p)}")
 
-        st.subheader("Table View")
-        edited_df = st.data_editor(
-            df,
-            column_config={
-                "url": st.column_config.ImageColumn("image", pinned=True),
-                "selected": st.column_config.CheckboxColumn("Select", pinned=True),
-            },
-            hide_index=True,
-            key="data_editor",
-        )
+        tabs = st.tabs(["Table", "Scatter", "Distance"])
 
-        # Update scatter plot with selected highlights
+        with tabs[0]:
+            edited_df = st.data_editor(
+                df,
+                column_config={
+                    "url": st.column_config.ImageColumn("image", pinned=True),
+                    "selected": st.column_config.CheckboxColumn("Select", pinned=True),
+                },
+                hide_index=True,
+                key="data_editor",
+            )
 
         # Create separate dataframes for selected and non-selected points
         df_not_selected = edited_df[~edited_df["selected"]]
         df_selected = edited_df[edited_df["selected"]]
 
-        st.subheader("Scatter")
-        color_by = st.selectbox(
-            "Color by",
-            options=df.columns.tolist(),
-            index=0,
-            help="Select the column to color the points by.",
-        )
-        fig = px.scatter(
-            df_not_selected,
-            x="x",
-            y="y",
-            color=color_by,
-            hover_data=["filename"],
-        )
-
-        # Add selected points with border
-        if not df_selected.empty:
-            fig_selected = px.scatter(
-                df_selected,
+        with tabs[1]:
+            color_by = st.selectbox(
+                "Color by",
+                options=df.columns.tolist(),
+                index=0,
+                help="Select the column to color the points by.",
+            )
+            fig = px.scatter(
+                df_not_selected,
                 x="x",
                 y="y",
                 color=color_by,
                 hover_data=["filename"],
             )
 
-            # Update selected points to have thick border
-            for trace in fig_selected.data:
-                trace.marker.line.width = 3
-                trace.marker.line.color = "red"
-                trace.marker.size = 12
-                trace.showlegend = False  # Don't duplicate in legend
-                fig.add_trace(trace)
+            # Add selected points with border
+            if not df_selected.empty:
+                fig_selected = px.scatter(
+                    df_selected,
+                    x="x",
+                    y="y",
+                    color=color_by,
+                    hover_data=["filename"],
+                )
 
-        # Update layout for non-selected points (no border)
-        fig.update_traces(
-            marker=dict(size=8, line=dict(width=0)), selector=dict(showlegend=True)
-        )
+                # Update selected points to have thick border
+                for trace in fig_selected.data:
+                    trace.marker.line.width = 3
+                    trace.marker.line.color = "red"
+                    trace.marker.size = 12
+                    trace.showlegend = False  # Don't duplicate in legend
+                    fig.add_trace(trace)
 
-        fig.update_layout(xaxis_title="X", yaxis_title="Y", legend_title=color_by)
-        st.plotly_chart(fig, use_container_width=True)
-        st.download_button(
-            label="Download Image Embeddings CSV",
-            data=edited_df[["filename", "x", "y"]].to_csv(index=False).encode("utf-8"),
-            file_name="image_embeddings.csv",
-            mime="text/csv",
-        )
-
-        st.subheader("Distance Matrix")
-        distance_type = st.selectbox(
-            "Distance type",
-            ("euclidean", "manhattan", "cosine"),
-            label_visibility="collapsed",
-        )
-
-        coords = edited_df[["x", "y"]].to_numpy()
-        distance_matrix = pairwise_distances(coords, metric=distance_type)
-        heatmap_fig = go.Figure(
-            data=go.Heatmap(
-                x=edited_df["filename"],
-                y=edited_df["filename"],
-                z=distance_matrix,
-                colorscale="plasma",
-            ),
-            layout=go.Layout(
-                xaxis={"showticklabels": False},
-                yaxis={"showticklabels": False},
-            ),
-        )
-        st.plotly_chart(heatmap_fig)
-        st.download_button(
-            label="Download Distance Matrix CSV",
-            data=pd.DataFrame(
-                distance_matrix,
-                index=edited_df["filename"],
-                columns=edited_df["filename"],
+            # Update layout for non-selected points (no border)
+            fig.update_traces(
+                marker=dict(size=8, line=dict(width=0)), selector=dict(showlegend=True)
             )
-            .to_csv()
-            .encode("utf-8"),
-            file_name="distance_matrix.csv",
-            mime="text/csv",
-        )
+
+            fig.update_layout(xaxis_title="X", yaxis_title="Y", legend_title=color_by)
+            st.plotly_chart(fig, use_container_width=True)
+            st.download_button(
+                label="Download Image Embeddings CSV",
+                data=edited_df[["filename", "x", "y"]]
+                .to_csv(index=False)
+                .encode("utf-8"),
+                file_name="image_embeddings.csv",
+                mime="text/csv",
+            )
+
+        with tabs[2]:
+            distance_type = st.selectbox(
+                "Distance type",
+                ("euclidean", "manhattan", "cosine"),
+                label_visibility="collapsed",
+            )
+
+            coords = edited_df[["x", "y"]].to_numpy()
+            distance_matrix = pairwise_distances(coords, metric=distance_type)
+            heatmap_fig = go.Figure(
+                data=go.Heatmap(
+                    x=edited_df["filename"],
+                    y=edited_df["filename"],
+                    z=distance_matrix,
+                    colorscale="plasma",
+                ),
+                layout=go.Layout(
+                    xaxis={"showticklabels": False},
+                    yaxis={"showticklabels": False},
+                ),
+            )
+            st.plotly_chart(heatmap_fig)
+            st.download_button(
+                label="Download Distance Matrix CSV",
+                data=pd.DataFrame(
+                    distance_matrix,
+                    index=edited_df["filename"],
+                    columns=edited_df["filename"],
+                )
+                .to_csv()
+                .encode("utf-8"),
+                file_name="distance_matrix.csv",
+                mime="text/csv",
+            )
 
 
 if __name__ == "__main__":
