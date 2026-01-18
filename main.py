@@ -13,10 +13,8 @@ from src.encoders import EncoderStrategyFactory
 from src.reducers import ReducerStrategyFactory
 
 
-def app():
-    st.sidebar.title("Configuration")
-
-    st.sidebar.subheader("Data")
+def load_dataset() -> pd.DataFrame:
+    """Load dataset CSV from file uploader."""
     dataset_csv = st.sidebar.file_uploader(
         "Upload dataset CSV",
         type=["csv"],
@@ -25,10 +23,11 @@ def app():
     if dataset_csv is None:
         st.warning("Please upload a dataset CSV file.")
         st.stop()
-    dataset_df = pd.read_csv(dataset_csv)
+    return pd.read_csv(dataset_csv)
 
-    st.sidebar.subheader("Encoder")
-    # st.sidebar.write("Select the encoder model for feature extraction:")
+
+def configure_encoder() -> tuple[str, dict]:
+    """Configure encoder settings from sidebar."""
     encoder_type = st.sidebar.selectbox(
         "Encoder type",
         ("resnet", "clip", "dinov2", "depth_anything_v2"),
@@ -49,8 +48,11 @@ def app():
         )
         encoder_config["dinov2_variant"] = dinov2_variant
         encoder_config["dinov2_image_size"] = dinov2_image_size
+    return encoder_type, encoder_config
 
-    st.sidebar.subheader("Dimensionality Reduction")
+
+def configure_reducer() -> tuple[str, dict]:
+    """Configure dimensionality reduction settings from sidebar."""
     dim_reduction = st.sidebar.selectbox(
         "Reduction method",
         ("pca", "tsne"),
@@ -74,77 +76,187 @@ def app():
         dim_reduction_config["tsne_perplexity"] = tsne_perplexity
         dim_reduction_config["tsne_learning_rate"] = tsne_learning_rate
         dim_reduction_config["tsne_iterations"] = tsne_iterations
+    return dim_reduction, dim_reduction_config
+
+
+def run_embedding(
+    dataset_df: pd.DataFrame,
+    encoder_type: str,
+    encoder_config: dict,
+    dim_reduction: str,
+    dim_reduction_config: dict,
+) -> None:
+    """Run embedding process and store result in session state."""
+    encoder = EncoderStrategyFactory.get_strategy(encoder_type)
+    reducer = ReducerStrategyFactory.get_strategy(dim_reduction)
+    embedder = Embedder(
+        encoder_strategy=encoder,
+        reducer_strategy=reducer,
+    )
+
+    with st.spinner(f"Embedding {len(dataset_df)} images..."):
+        st.session_state.df = embedder.embed(
+            dataset_df=dataset_df,
+            encoder_config=encoder_config,
+            reducer_config=dim_reduction_config,
+        )
+
+
+def filter_dataframe_by_range(df: pd.DataFrame) -> pd.DataFrame:
+    """Filter dataframe by x and y range sliders."""
+    range_cols = st.columns(2)
+    with range_cols[0]:
+        x_range = st.slider(
+            "X range",
+            float(df["x"].min()),
+            float(df["x"].max()),
+            (
+                float(df["x"].min()),
+                float(df["x"].max()),
+            ),
+        )
+    with range_cols[1]:
+        y_range = st.slider(
+            "Y range",
+            float(df["y"].min()),
+            float(df["y"].max()),
+            (
+                float(df["y"].min()),
+                float(df["y"].max()),
+            ),
+        )
+    return df[
+        (df["x"] >= x_range[0])
+        & (df["x"] <= x_range[1])
+        & (df["y"] >= y_range[0])
+        & (df["y"] <= y_range[1])
+    ]
+
+
+def prepare_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+    """Prepare dataframe with additional columns."""
+    if "selected" not in df.columns:
+        df["selected"] = False
+    df["url"] = df["filename"].apply(lambda p: f"app/static/{quote(p)}")
+    return df
+
+
+def render_table_view(df: pd.DataFrame) -> pd.DataFrame:
+    """Render table view and return edited dataframe."""
+    return st.data_editor(
+        df,
+        column_config={
+            "url": st.column_config.ImageColumn("image", pinned=True),
+            "selected": st.column_config.CheckboxColumn("Select", pinned=True),
+        },
+        hide_index=True,
+        key="data_editor",
+    )
+
+
+def render_scatter_plot(
+    df_not_selected: pd.DataFrame,
+    df_selected: pd.DataFrame,
+    color_by: str,
+) -> None:
+    """Render scatter plot with selected points highlighted."""
+    fig = px.scatter(
+        df_not_selected,
+        x="x",
+        y="y",
+        color=color_by,
+        hover_data=["filename"],
+    )
+
+    # Add selected points with border
+    if not df_selected.empty:
+        fig_selected = px.scatter(
+            df_selected,
+            x="x",
+            y="y",
+            color=color_by,
+            hover_data=["filename"],
+        )
+
+        # Update selected points to have thick border
+        for trace in fig_selected.data:
+            trace.marker.line.width = 3
+            trace.marker.line.color = "red"
+            trace.marker.size = 12
+            trace.showlegend = False
+            fig.add_trace(trace)
+
+    # Update layout for non-selected points (no border)
+    fig.update_traces(
+        marker=dict(size=8, line=dict(width=0)), selector=dict(showlegend=True)
+    )
+
+    fig.update_layout(xaxis_title="X", yaxis_title="Y", legend_title=color_by)
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def render_distance_matrix(edited_df: pd.DataFrame, distance_type: str) -> None:
+    """Render distance matrix heatmap."""
+    coords = edited_df[["x", "y"]].to_numpy()
+    distance_matrix = pairwise_distances(coords, metric=distance_type)
+    heatmap_fig = go.Figure(
+        data=go.Heatmap(
+            x=edited_df["filename"],
+            y=edited_df["filename"],
+            z=distance_matrix,
+            colorscale="plasma",
+        ),
+        layout=go.Layout(
+            xaxis={"showticklabels": False},
+            yaxis={"showticklabels": False},
+        ),
+    )
+    st.plotly_chart(heatmap_fig)
+    st.download_button(
+        label="Download Distance Matrix CSV",
+        data=pd.DataFrame(
+            distance_matrix,
+            index=edited_df["filename"],
+            columns=edited_df["filename"],
+        )
+        .to_csv()
+        .encode("utf-8"),
+        file_name="distance_matrix.csv",
+        mime="text/csv",
+    )
+
+
+def app():
+    st.sidebar.title("Configuration")
+
+    st.sidebar.subheader("Data")
+    dataset_df = load_dataset()
+
+    st.sidebar.subheader("Encoder")
+    encoder_type, encoder_config = configure_encoder()
+
+    st.sidebar.subheader("Dimensionality Reduction")
+    dim_reduction, dim_reduction_config = configure_reducer()
 
     st.title("Vision Board")
     if st.sidebar.button("Run"):
-        # Prepare encoder and reducer
-        encoder = EncoderStrategyFactory.get_strategy(encoder_type)
-        reducer = ReducerStrategyFactory.get_strategy(dim_reduction)
-        embedder = Embedder(
-            encoder_strategy=encoder,
-            reducer_strategy=reducer,
+        run_embedding(
+            dataset_df,
+            encoder_type,
+            encoder_config,
+            dim_reduction,
+            dim_reduction_config,
         )
-
-        # Embedding images
-        with st.spinner(f"Embedding {len(dataset_df)} images..."):
-            st.session_state.df = embedder.embed(
-                dataset_df=dataset_df,
-                encoder_config=encoder_config,
-                reducer_config=dim_reduction_config,
-            )
 
     if "df" in st.session_state:
         df = st.session_state.df.copy()
-        range_cols = st.columns(2)
-        with range_cols[0]:
-            x_range = st.slider(
-                "X range",
-                float(df["x"].min()),
-                float(df["x"].max()),
-                (
-                    float(df["x"].min()),
-                    float(df["x"].max()),
-                ),
-            )
-        with range_cols[1]:
-            y_range = st.slider(
-                "Y range",
-                float(df["y"].min()),
-                float(df["y"].max()),
-                (
-                    float(df["y"].min()),
-                    float(df["y"].max()),
-                ),
-            )
-        df = df[
-            (df["x"] >= x_range[0])
-            & (df["x"] <= x_range[1])
-            & (df["y"] >= y_range[0])
-            & (df["y"] <= y_range[1])
-        ]
-
-        if "selected" not in df.columns:
-            df["selected"] = False
-
-        # FIXME: static ディレクトリに画像を置く必要がある（アプリを起動する前に）
-        # TODO: 相対パスを使った方法を検討
-        # 例:
-        # mkdir static && cd static
-        # ln -s ../data/InsPLAD-fault/defect_supervised/glass-insulator/val/*/*.jpg .
-        df["url"] = df["filename"].apply(lambda p: f"app/static/{quote(p)}")
+        df = filter_dataframe_by_range(df)
+        df = prepare_dataframe(df)
 
         tabs = st.tabs(["Table", "Scatter", "Distance"])
 
         with tabs[0]:
-            edited_df = st.data_editor(
-                df,
-                column_config={
-                    "url": st.column_config.ImageColumn("image", pinned=True),
-                    "selected": st.column_config.CheckboxColumn("Select", pinned=True),
-                },
-                hide_index=True,
-                key="data_editor",
-            )
+            edited_df = render_table_view(df)
 
         # Create separate dataframes for selected and non-selected points
         df_not_selected = edited_df[~edited_df["selected"]]
@@ -157,39 +269,7 @@ def app():
                 index=0,
                 help="Select the column to color the points by.",
             )
-            fig = px.scatter(
-                df_not_selected,
-                x="x",
-                y="y",
-                color=color_by,
-                hover_data=["filename"],
-            )
-
-            # Add selected points with border
-            if not df_selected.empty:
-                fig_selected = px.scatter(
-                    df_selected,
-                    x="x",
-                    y="y",
-                    color=color_by,
-                    hover_data=["filename"],
-                )
-
-                # Update selected points to have thick border
-                for trace in fig_selected.data:
-                    trace.marker.line.width = 3
-                    trace.marker.line.color = "red"
-                    trace.marker.size = 12
-                    trace.showlegend = False  # Don't duplicate in legend
-                    fig.add_trace(trace)
-
-            # Update layout for non-selected points (no border)
-            fig.update_traces(
-                marker=dict(size=8, line=dict(width=0)), selector=dict(showlegend=True)
-            )
-
-            fig.update_layout(xaxis_title="X", yaxis_title="Y", legend_title=color_by)
-            st.plotly_chart(fig, use_container_width=True)
+            render_scatter_plot(df_not_selected, df_selected, color_by)
             st.download_button(
                 label="Download Image Embeddings CSV",
                 data=edited_df[["filename", "x", "y"]]
@@ -205,34 +285,7 @@ def app():
                 ("euclidean", "manhattan", "cosine"),
                 label_visibility="collapsed",
             )
-
-            coords = edited_df[["x", "y"]].to_numpy()
-            distance_matrix = pairwise_distances(coords, metric=distance_type)
-            heatmap_fig = go.Figure(
-                data=go.Heatmap(
-                    x=edited_df["filename"],
-                    y=edited_df["filename"],
-                    z=distance_matrix,
-                    colorscale="plasma",
-                ),
-                layout=go.Layout(
-                    xaxis={"showticklabels": False},
-                    yaxis={"showticklabels": False},
-                ),
-            )
-            st.plotly_chart(heatmap_fig)
-            st.download_button(
-                label="Download Distance Matrix CSV",
-                data=pd.DataFrame(
-                    distance_matrix,
-                    index=edited_df["filename"],
-                    columns=edited_df["filename"],
-                )
-                .to_csv()
-                .encode("utf-8"),
-                file_name="distance_matrix.csv",
-                mime="text/csv",
-            )
+            render_distance_matrix(edited_df, distance_type)
 
 
 if __name__ == "__main__":
