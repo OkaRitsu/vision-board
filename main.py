@@ -238,7 +238,7 @@ def app():
     st.sidebar.subheader("Dimensionality Reduction")
     dim_reduction, dim_reduction_config = configure_reducer()
 
-    st.title("Vision Board")
+    st.title("🌌 Vision Board")
     if st.sidebar.button("Run"):
         run_embedding(
             dataset_df,
@@ -289,4 +289,10 @@ def app():
 
 
 if __name__ == "__main__":
+    st.set_page_config(
+        page_title="Vision Board",
+        page_icon="🌌",
+        layout="wide",
+        initial_sidebar_state="expanded",
+    )
     app()
