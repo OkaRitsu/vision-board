@@ -4,7 +4,9 @@ from urllib.parse import quote
 
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objs as go
 import streamlit as st
+from sklearn.metrics import pairwise_distances
 
 from src.embedder import Embedder
 from src.encoders import EncoderStrategyFactory
@@ -131,6 +133,7 @@ def app():
         # ln -s ../data/InsPLAD-fault/defect_supervised/glass-insulator/val/*/*.jpg .
         df["url"] = df["filename"].apply(lambda p: f"app/static/{quote(p)}")
 
+        st.subheader("Table View")
         edited_df = st.data_editor(
             df,
             column_config={
@@ -147,6 +150,7 @@ def app():
         df_not_selected = edited_df[~edited_df["selected"]]
         df_selected = edited_df[edited_df["selected"]]
 
+        st.subheader("Scatter")
         color_by = st.selectbox(
             "Color by",
             options=df.columns.tolist(),
@@ -186,6 +190,29 @@ def app():
 
         fig.update_layout(xaxis_title="X", yaxis_title="Y", legend_title=color_by)
         st.plotly_chart(fig, use_container_width=True)
+
+        st.subheader("Distance Matrix")
+        distance_type = st.selectbox(
+            "Distance type",
+            ("euclidean", "manhattan", "cosine"),
+            label_visibility="collapsed",
+        )
+
+        coords = edited_df[["x", "y"]].to_numpy()
+        distance_matrix = pairwise_distances(coords, metric=distance_type)
+        heatmap_fig = go.Figure(
+            data=go.Heatmap(
+                x=edited_df["filename"],
+                y=edited_df["filename"],
+                z=distance_matrix,
+                colorscale="plasma",
+            ),
+            layout=go.Layout(
+                xaxis={"showticklabels": False},
+                yaxis={"showticklabels": False},
+            ),
+        )
+        st.plotly_chart(heatmap_fig)
 
 
 if __name__ == "__main__":
