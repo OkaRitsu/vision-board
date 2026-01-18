@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
 from urllib.parse import quote
 
 import pandas as pd
@@ -16,7 +15,15 @@ def app():
     st.sidebar.title("Configuration")
 
     st.sidebar.subheader("Data")
-    data_dir = st.sidebar.text_input("Dataset directory", "data/images")
+    dataset_csv = st.sidebar.file_uploader(
+        "Upload dataset CSV",
+        type=["csv"],
+        help="CSV file with columns: 'filepath' and 'label'",
+    )
+    if dataset_csv is None:
+        st.warning("Please upload a dataset CSV file.")
+        st.stop()
+    dataset_df = pd.read_csv(dataset_csv)
 
     st.sidebar.subheader("Encoder")
     # st.sidebar.write("Select the encoder model for feature extraction:")
@@ -68,12 +75,6 @@ def app():
 
     st.title("Vision Board")
     if st.sidebar.button("Run"):
-        # Validate data directory
-        data_path = Path(data_dir)
-        if not data_path.exists():
-            st.error(f"Dataset directory not found: {data_dir}")
-            return
-
         # Prepare encoder and reducer
         encoder = EncoderStrategyFactory.get_strategy(encoder_type)
         reducer = ReducerStrategyFactory.get_strategy(dim_reduction)
@@ -83,22 +84,12 @@ def app():
         )
 
         # Embedding images
-        with st.spinner("Embedding images..."):
-            coords, labels, paths = embedder.embed(
-                data_dir=data_dir,
+        with st.spinner(f"Embedding {len(dataset_df)} images..."):
+            st.session_state.df = embedder.embed(
+                dataset_df=dataset_df,
                 encoder_config=encoder_config,
                 reducer_config=dim_reduction_config,
             )
-
-        # Create visualization
-        st.session_state.df = pd.DataFrame(
-            {
-                "x": coords[:, 0],
-                "y": coords[:, 1],
-                "label": labels,
-                "filename": [Path(p).name for p in paths],
-            }
-        )
 
     if "df" in st.session_state:
         df = st.session_state.df.copy()
