@@ -190,6 +190,12 @@ def app():
 
         fig.update_layout(xaxis_title="X", yaxis_title="Y", legend_title=color_by)
         st.plotly_chart(fig, use_container_width=True)
+        st.download_button(
+            label="Download Image Embeddings CSV",
+            data=edited_df[["filename", "x", "y"]].to_csv(index=False).encode("utf-8"),
+            file_name="image_embeddings.csv",
+            mime="text/csv",
+        )
 
         st.subheader("Distance Matrix")
         distance_type = st.selectbox(
@@ -213,6 +219,18 @@ def app():
             ),
         )
         st.plotly_chart(heatmap_fig)
+        st.download_button(
+            label="Download Distance Matrix CSV",
+            data=pd.DataFrame(
+                distance_matrix,
+                index=edited_df["filename"],
+                columns=edited_df["filename"],
+            )
+            .to_csv()
+            .encode("utf-8"),
+            file_name="distance_matrix.csv",
+            mime="text/csv",
+        )
 
 
 if __name__ == "__main__":
