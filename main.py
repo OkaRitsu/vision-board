@@ -147,11 +147,17 @@ def app():
         df_not_selected = edited_df[~edited_df["selected"]]
         df_selected = edited_df[edited_df["selected"]]
 
+        color_by = st.selectbox(
+            "Color by",
+            options=df.columns.tolist(),
+            index=0,
+            help="Select the column to color the points by.",
+        )
         fig = px.scatter(
             df_not_selected,
             x="x",
             y="y",
-            color="label",
+            color=color_by,
             hover_data=["filename"],
         )
 
@@ -161,7 +167,7 @@ def app():
                 df_selected,
                 x="x",
                 y="y",
-                color="label",
+                color=color_by,
                 hover_data=["filename"],
             )
 
@@ -178,7 +184,7 @@ def app():
             marker=dict(size=8, line=dict(width=0)), selector=dict(showlegend=True)
         )
 
-        fig.update_layout(xaxis_title="X", yaxis_title="Y", legend_title="Class")
+        fig.update_layout(xaxis_title="X", yaxis_title="Y", legend_title=color_by)
         st.plotly_chart(fig, use_container_width=True)
 
 
