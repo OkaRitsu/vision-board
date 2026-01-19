@@ -7,6 +7,7 @@ import plotly.express as px
 import plotly.graph_objs as go
 import streamlit as st
 from sklearn.metrics import pairwise_distances
+from streamlit_plotly_events import plotly_events
 
 from src.embedder import Embedder
 from src.encoders import EncoderStrategyFactory
@@ -192,14 +193,19 @@ def render_scatter_plot(
     )
 
     fig.update_layout(xaxis_title="X", yaxis_title="Y", legend_title=color_by)
-    st.plotly_chart(fig, use_container_width=True)
+    event = st.plotly_chart(fig, key="filename", on_select="rerun")
+
+    # Show images of selected points
+    for selected_point in event.selection.points:
+        filename = selected_point["customdata"][0]
+        st.image(f"static/{filename}", caption=filename)
 
 
 def render_distance_matrix(edited_df: pd.DataFrame, distance_type: str) -> None:
     """Render distance matrix heatmap."""
     coords = edited_df[["x", "y"]].to_numpy()
     distance_matrix = pairwise_distances(coords, metric=distance_type)
-    heatmap_fig = go.Figure(
+    fig = go.Figure(
         data=go.Heatmap(
             x=edited_df["filename"],
             y=edited_df["filename"],
@@ -211,7 +217,7 @@ def render_distance_matrix(edited_df: pd.DataFrame, distance_type: str) -> None:
             yaxis={"showticklabels": False},
         ),
     )
-    st.plotly_chart(heatmap_fig)
+    st.plotly_chart(fig)
     st.download_button(
         label="Download Distance Matrix CSV",
         data=pd.DataFrame(
