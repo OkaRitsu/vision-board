@@ -59,55 +59,16 @@ def configure_reducer() -> tuple[str, dict]:
         label_visibility="collapsed",
     )
     dim_reduction_config = {}
-    if dim_reduction == "tsne":
-        tsne_perplexity = st.sidebar.number_input(
-            "t-SNE perplexity", min_value=5.0, max_value=100.0, value=30.0, step=1.0
-        )
-        tsne_learning_rate = st.sidebar.number_input(
-            "t-SNE learning rate",
-            min_value=10.0,
-            max_value=1000.0,
-            value=200.0,
-            step=10.0,
-        )
-        tsne_iterations = st.sidebar.number_input(
-            "t-SNE iterations", min_value=250, max_value=5000, value=1000, step=250
-        )
-        dim_reduction_config["tsne_perplexity"] = tsne_perplexity
-        dim_reduction_config["tsne_learning_rate"] = tsne_learning_rate
-        dim_reduction_config["tsne_iterations"] = tsne_iterations
     return dim_reduction, dim_reduction_config
-
-
-def run_embedding(
-    dataset_df: pd.DataFrame,
-    encoder_type: str,
-    encoder_config: dict,
-    dim_reduction: str,
-    dim_reduction_config: dict,
-) -> None:
-    """Run embedding process and store result in session state."""
-    encoder = EncoderStrategyFactory.get_strategy(encoder_type)
-    reducer = ReducerStrategyFactory.get_strategy(dim_reduction)
-    embedder = Embedder(
-        encoder_strategy=encoder,
-        reducer_strategy=reducer,
-    )
-
-    with st.spinner(f"Embedding {len(dataset_df)} images..."):
-        st.session_state.df = embedder.embed(
-            dataset_df=dataset_df,
-            encoder_config=encoder_config,
-            reducer_config=dim_reduction_config,
-        )
 
 
 def filter_dataframe_by_range(df: pd.DataFrame) -> pd.DataFrame:
     """Filter dataframe by x and y range sliders."""
+    st.subheader("Display Range")
     range_cols = st.columns(2)
     with range_cols[0]:
         x_range = st.slider(
-            "X range",
+            "X",
             float(df["x"].min()),
             float(df["x"].max()),
             (
@@ -117,7 +78,7 @@ def filter_dataframe_by_range(df: pd.DataFrame) -> pd.DataFrame:
         )
     with range_cols[1]:
         y_range = st.slider(
-            "Y range",
+            "Y",
             float(df["y"].min()),
             float(df["y"].max()),
             (
@@ -244,19 +205,37 @@ def app():
     dim_reduction, dim_reduction_config = configure_reducer()
 
     st.title("🌌 Vision Board")
+
+    encoder = EncoderStrategyFactory.get_strategy(encoder_type)
+    reducer = ReducerStrategyFactory.get_strategy(dim_reduction)
+    embedder = Embedder(
+        encoder_strategy=encoder,
+        reducer_strategy=reducer,
+    )
     if st.sidebar.button("Run"):
-        run_embedding(
-            dataset_df,
-            encoder_type,
-            encoder_config,
-            dim_reduction,
-            dim_reduction_config,
-        )
+        with st.spinner(f"Embedding {len(dataset_df)} images..."):
+            st.session_state.df = embedder.embed(
+                dataset_df=dataset_df,
+                encoder_config=encoder_config,
+                reducer_config=dim_reduction_config,
+            )
 
     if "df" in st.session_state:
         df = st.session_state.df.copy()
         df = filter_dataframe_by_range(df)
         df = prepare_dataframe(df)
+
+        st.subheader("Dimension Reduction Settings")
+        if dim_reduction == "tsne":
+            dim_reduction_config["max_iter"] = 5000
+            dim_reduction_config["perplexity"] = st.slider(
+                "perplexity",
+                min_value=1,
+                max_value=len(df) - 1,
+                value=dim_reduction_config.get("perplexity", 30),
+                step=1,
+            )
+            df = embedder.embed(df, encoder_config, dim_reduction_config)
 
         tabs = st.tabs(["Table", "Scatter", "Distance"])
 
