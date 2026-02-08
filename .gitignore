@@ -1,6 +1,7 @@
 .venv/
 data/
 outputs/
+cache/
 static/
 __pycache__/
 *.pyc

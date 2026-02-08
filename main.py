@@ -7,7 +7,6 @@ import plotly.express as px
 import plotly.graph_objs as go
 import streamlit as st
 from sklearn.metrics import pairwise_distances
-from streamlit_plotly_events import plotly_events
 
 from src.embedder import Embedder
 from src.encoders import EncoderStrategyFactory
